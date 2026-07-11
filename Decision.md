@@ -1,0 +1,1 @@
+Use snake_case for JSON

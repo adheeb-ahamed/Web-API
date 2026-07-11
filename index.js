@@ -1,8 +1,16 @@
 const express = require('express');
 const data = require('./seedTuk.json');
 
+const deviceKeys = {};
+data.vehicles.forEach(v => {
+  const padded = String(v.id).padStart(2, '0');
+  deviceKeys[`v-${padded}`] = `key_v${padded}`;
+});
+
 const app = express();
 const port = 3000;
+
+app.use(express.json());
 
 app.get('/', (req, res) => {
   res.json({ status: 'ok', session: 'NB6007CEM S2' });
@@ -57,7 +65,7 @@ app.get('/vehicles/:vehicleId', (req, res) => {
         timestamp: vehiclePings[0].timestamp,
         lat: vehiclePings[0].latitude,
         lng: vehiclePings[0].longitude,
-        speed: 0
+        speed: vehiclePings[0].speed ?? null
       }
     : null;
 
@@ -74,7 +82,61 @@ app.get('/vehicles/:vehicleId/pings', (req, res) => {
   const vehicle = data.vehicles.find(v => v.id === Number(req.params.vehicleId));
   if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
   const pings = data.pings.filter(p => p.vehicle_id === vehicle.id);
-  res.json(pings.map(p => ({ ping_id: p.id, vehicle_id: p.vehicle_id, timestamp: p.timestamp, lat: p.latitude, lng: p.longitude, speed: 0 })));
+  res.json(pings.map(p => ({ ping_id: p.id, vehicle_id: p.vehicle_id, timestamp: p.timestamp, lat: p.latitude, lng: p.longitude, speed: p.speed ?? null })));
+});
+
+app.post('/vehicles/:vehicleId/pings', (req, res) => {
+  const apiKey = req.get('X-API-Key');
+  if (!apiKey) return res.status(401).json({ error: 'Missing X-API-Key header' });
+
+  const vehicleId = Number(req.params.vehicleId);
+  const vehicle = data.vehicles.find(v => v.id === vehicleId);
+  if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
+
+  const padded = String(vehicleId).padStart(2, '0');
+  const vKey = `v-${padded}`;
+  if (deviceKeys[vKey] !== apiKey) return res.status(403).json({ error: 'Invalid API key' });
+
+  const { latitude, longitude, speed } = req.body;
+  if (latitude == null || longitude == null || speed == null) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const maxId = data.pings.reduce((max, p) => Math.max(max, p.id), 0);
+  const newId = maxId + 1;
+  const timestamp = new Date().toISOString();
+  const ping = { id: newId, vehicle_id: vehicleId, latitude, longitude, speed, timestamp };
+  data.pings.push(ping);
+
+  const mapped = {
+    ping_id: String(newId),
+    vehicle_id: String(vehicleId),
+    timestamp,
+    lat: latitude,
+    lng: longitude,
+    speed
+  };
+
+  res.set('ETag', `"${newId}"`);
+  res.set('Last-Modified', timestamp);
+  res.status(201)
+    .location(`/vehicles/${vehicleId}/pings/${newId}`)
+    .json(mapped);
+});
+
+app.get('/vehicles/:vehicleId/pings/:pingId', (req, res) => {
+  const vehicleId = Number(req.params.vehicleId);
+  const pingId = Number(req.params.pingId);
+  const ping = data.pings.find(p => p.id === pingId && p.vehicle_id === vehicleId);
+  if (!ping) return res.status(404).json({ error: 'Ping not found' });
+  res.json({
+    ping_id: String(ping.id),
+    vehicle_id: String(ping.vehicle_id),
+    timestamp: ping.timestamp,
+    lat: ping.latitude,
+    lng: ping.longitude,
+    speed: ping.speed ?? null
+  });
 });
 
 app.get('/vehicles/:vehicleId/last-position', (req, res) => {
@@ -89,7 +151,7 @@ app.get('/vehicles/:vehicleId/last-position', (req, res) => {
     timestamp: pings[0].timestamp,
     lat: pings[0].latitude,
     lng: pings[0].longitude,
-    speed: 0
+    speed: pings[0].speed ?? null
   });
 });
 
