@@ -12,6 +12,26 @@ const port = 3000;
 
 app.use(express.json());
 
+function basicAuth(req, res, next) {
+  const auth = req.get('Authorization');
+  if (!auth) {
+    res.set('WWW-Authenticate', 'Basic realm="Police API"');
+    return res.status(401).json({ error: 'Missing Authorization header' });
+  }
+  const encoded = auth.split(' ')[1];
+  const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
+  const [username, password] = decoded.split(':');
+  if (username !== 'police' || password !== 'nibm2024') {
+    return res.status(403).json({ error: 'Invalid credentials' });
+  }
+  next();
+}
+
+app.use((req, res, next) => {
+  if (req.method !== 'GET') return next();
+  basicAuth(req, res, next);
+});
+
 app.get('/', (req, res) => {
   res.json({ status: 'ok', session: 'NB6007CEM S2' });
 });
