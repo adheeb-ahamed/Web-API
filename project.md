@@ -1,6 +1,9 @@
+
 # TaxiCo Vehicle Tracking API — Project Plan
 
 ## Overview
+
+Strictly allign with rest API.
 
 A read-only REST API for a taxi company to track its fleet vehicles across provinces, districts, and police stations in Sri Lanka. The API serves data from a single JSON seed file (`seedTuk.json`) loaded into memory at application startup. No database, no authentication, no write operations.
 
@@ -308,3 +311,4 @@ Node's module caching ensures the data is loaded only once and shared across all
 | `seedTuk.json` | Static seed data — provinces, districts, stations, vehicles, pings |
 | `package.json` | Project metadata and dependencies (express ^5.2.1) |
 | `project.md` | This document — project plan and API reference |
+| `Decisions.md` | This document - project decisions should be explicitly checked |
