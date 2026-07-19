@@ -1,5 +1,9 @@
 const express = require('express');
+const mongoose = require('mongoose');
+require('dotenv').config();
+
 const data = require('./seedTuk.json');
+const Ping = require('./models/Ping');
 
 const deviceKeys = {};
 data.vehicles.forEach(v => {
@@ -70,111 +74,174 @@ app.get('/vehicles', (req, res) => {
   res.json(data.vehicles.map(v => ({ vehicle_id: v.id, reg_number: v.register_number, device_id: v.device_id, station_id: v.station_id })));
 });
 
-app.get('/vehicles/:vehicleId', (req, res) => {
-  const vehicle = data.vehicles.find(v => v.id === Number(req.params.vehicleId));
-  if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
+app.get('/vehicles/:vehicleId', async (req, res) => {
+  try {
+    const vehicle = data.vehicles.find(v => v.id === Number(req.params.vehicleId));
+    if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
 
-  const vehiclePings = data.pings
-    .filter(p => p.vehicle_id === vehicle.id)
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    const lastPingDoc = await Ping.findOne({ vehicle_id: vehicle.id })
+      .sort({ timestamp: -1 });
 
-  const lastPing = vehiclePings.length
-    ? {
-        ping_id: String(vehiclePings[0].id),
-        vehicle_id: String(vehiclePings[0].vehicle_id),
-        timestamp: vehiclePings[0].timestamp,
-        lat: vehiclePings[0].latitude,
-        lng: vehiclePings[0].longitude,
-        speed: vehiclePings[0].speed ?? null
-      }
-    : null;
+    const lastPing = lastPingDoc
+      ? {
+          ping_id: String(lastPingDoc.ping_id),
+          vehicle_id: String(lastPingDoc.vehicle_id),
+          timestamp: lastPingDoc.timestamp,
+          lat: lastPingDoc.latitude,
+          lng: lastPingDoc.longitude,
+          speed: lastPingDoc.speed ?? null
+        }
+      : null;
 
-  res.json({
-    vehicle_id: String(vehicle.id),
-    reg_number: vehicle.register_number,
-    device_id: vehicle.device_id,
-    station_id: String(vehicle.station_id),
-    last_ping: lastPing
-  });
-});
-
-app.get('/vehicles/:vehicleId/pings', (req, res) => {
-  const vehicle = data.vehicles.find(v => v.id === Number(req.params.vehicleId));
-  if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
-  const pings = data.pings.filter(p => p.vehicle_id === vehicle.id);
-  res.json(pings.map(p => ({ ping_id: p.id, vehicle_id: p.vehicle_id, timestamp: p.timestamp, lat: p.latitude, lng: p.longitude, speed: p.speed ?? null })));
-});
-
-app.post('/vehicles/:vehicleId/pings', (req, res) => {
-  const apiKey = req.get('X-API-Key');
-  if (!apiKey) return res.status(401).json({ error: 'Missing X-API-Key header' });
-
-  const vehicleId = Number(req.params.vehicleId);
-  const vehicle = data.vehicles.find(v => v.id === vehicleId);
-  if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
-
-  const padded = String(vehicleId).padStart(2, '0');
-  const vKey = `v-${padded}`;
-  if (deviceKeys[vKey] !== apiKey) return res.status(403).json({ error: 'Invalid API key' });
-
-  const { latitude, longitude, speed } = req.body;
-  if (latitude == null || longitude == null || speed == null) {
-    return res.status(400).json({ error: 'Missing required fields' });
+    res.json({
+      vehicle_id: String(vehicle.id),
+      reg_number: vehicle.register_number,
+      device_id: vehicle.device_id,
+      station_id: String(vehicle.station_id),
+      last_ping: lastPing
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
   }
-
-  const maxId = data.pings.reduce((max, p) => Math.max(max, p.id), 0);
-  const newId = maxId + 1;
-  const timestamp = new Date().toISOString();
-  const ping = { id: newId, vehicle_id: vehicleId, latitude, longitude, speed, timestamp };
-  data.pings.push(ping);
-
-  const mapped = {
-    ping_id: String(newId),
-    vehicle_id: String(vehicleId),
-    timestamp,
-    lat: latitude,
-    lng: longitude,
-    speed
-  };
-
-  res.set('ETag', `"${newId}"`);
-  res.set('Last-Modified', timestamp);
-  res.status(201)
-    .location(`/vehicles/${vehicleId}/pings/${newId}`)
-    .json(mapped);
 });
 
-app.get('/vehicles/:vehicleId/pings/:pingId', (req, res) => {
-  const vehicleId = Number(req.params.vehicleId);
-  const pingId = Number(req.params.pingId);
-  const ping = data.pings.find(p => p.id === pingId && p.vehicle_id === vehicleId);
-  if (!ping) return res.status(404).json({ error: 'Ping not found' });
-  res.json({
-    ping_id: String(ping.id),
-    vehicle_id: String(ping.vehicle_id),
-    timestamp: ping.timestamp,
-    lat: ping.latitude,
-    lng: ping.longitude,
-    speed: ping.speed ?? null
-  });
+app.get('/vehicles/:vehicleId/pings', async (req, res) => {
+  try {
+    const vehicle = data.vehicles.find(v => v.id === Number(req.params.vehicleId));
+    if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
+
+    const pings = await Ping.find({ vehicle_id: vehicle.id })
+      .sort({ timestamp: -1 });
+
+    res.json(pings.map(p => ({
+      ping_id: String(p.ping_id),
+      vehicle_id: String(p.vehicle_id),
+      timestamp: p.timestamp,
+      lat: p.latitude,
+      lng: p.longitude,
+      speed: p.speed ?? null
+    })));
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-app.get('/vehicles/:vehicleId/last-position', (req, res) => {
-  const vehicle = data.vehicles.find(v => v.id === Number(req.params.vehicleId));
-  if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
-  const pings = data.pings
-    .filter(p => p.vehicle_id === vehicle.id)
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  if (!pings.length) return res.status(404).json({ error: 'No pings found for this vehicle' });
-  res.json({
-    vehicle_id: String(pings[0].vehicle_id),
-    timestamp: pings[0].timestamp,
-    lat: pings[0].latitude,
-    lng: pings[0].longitude,
-    speed: pings[0].speed ?? null
-  });
+app.post('/vehicles/:vehicleId/pings', async (req, res) => {
+  try {
+    const apiKey = req.get('X-API-Key');
+    if (!apiKey) return res.status(401).json({ error: 'Missing X-API-Key header' });
+
+    const vehicleId = Number(req.params.vehicleId);
+    const vehicle = data.vehicles.find(v => v.id === vehicleId);
+    if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
+
+    const padded = String(vehicleId).padStart(2, '0');
+    const vKey = `v-${padded}`;
+    if (deviceKeys[vKey] !== apiKey) return res.status(403).json({ error: 'Invalid API key' });
+
+    const { latitude, longitude, speed } = req.body;
+    if (latitude == null || longitude == null || speed == null) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    if (typeof latitude !== 'number' || latitude < -90 || latitude > 90) {
+      return res.status(400).json({ error: 'Latitude must be a number between -90 and 90' });
+    }
+    if (typeof longitude !== 'number' || longitude < -180 || longitude > 180) {
+      return res.status(400).json({ error: 'Longitude must be a number between -180 and 180' });
+    }
+    if (typeof speed !== 'number' || speed < 0) {
+      return res.status(400).json({ error: 'Speed must be a non-negative number' });
+    }
+
+    const lastPing = await Ping.findOne().sort({ ping_id: -1 });
+    const newId = lastPing ? lastPing.ping_id + 1 : 1;
+    const timestamp = new Date();
+
+    const ping = await Ping.create({
+      ping_id: newId,
+      vehicle_id: vehicleId,
+      latitude,
+      longitude,
+      speed,
+      timestamp
+    });
+
+    const mapped = {
+      ping_id: String(ping.ping_id),
+      vehicle_id: String(ping.vehicle_id),
+      timestamp: ping.timestamp,
+      lat: ping.latitude,
+      lng: ping.longitude,
+      speed: ping.speed
+    };
+
+    res.set('ETag', `"${newId}"`);
+    res.set('Last-Modified', ping.timestamp.toISOString());
+    res.status(201)
+      .location(`/vehicles/${vehicleId}/pings/${newId}`)
+      .json(mapped);
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}/`);
+app.get('/vehicles/:vehicleId/pings/:pingId', async (req, res) => {
+  try {
+    const vehicleId = Number(req.params.vehicleId);
+    const pingId = Number(req.params.pingId);
+    const ping = await Ping.findOne({ ping_id: pingId, vehicle_id: vehicleId });
+    if (!ping) return res.status(404).json({ error: 'Ping not found' });
+    res.json({
+      ping_id: String(ping.ping_id),
+      vehicle_id: String(ping.vehicle_id),
+      timestamp: ping.timestamp,
+      lat: ping.latitude,
+      lng: ping.longitude,
+      speed: ping.speed ?? null
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
+
+app.get('/vehicles/:vehicleId/last-position', async (req, res) => {
+  try {
+    const vehicle = data.vehicles.find(v => v.id === Number(req.params.vehicleId));
+    if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
+
+    const ping = await Ping.findOne({ vehicle_id: vehicle.id })
+      .sort({ timestamp: -1 });
+
+    if (!ping) return res.status(404).json({ error: 'No pings found for this vehicle' });
+
+    res.json({
+      vehicle_id: String(ping.vehicle_id),
+      timestamp: ping.timestamp,
+      lat: ping.latitude,
+      lng: ping.longitude,
+      speed: ping.speed ?? null
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+async function startServer() {
+  try {
+    if (!process.env.MONGODB_URI) {
+      throw new Error('MONGODB_URI is missing from the .env file');
+    }
+
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log('MongoDB Atlas connected successfully');
+
+    app.listen(port, () => {
+      console.log(`Server running at http://localhost:${port}/`);
+    });
+  } catch (error) {
+    console.error('Unable to start server:', error.message);
+    process.exit(1);
+  }
+}
+
+startServer();
